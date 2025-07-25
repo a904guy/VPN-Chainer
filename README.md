@@ -30,9 +30,19 @@ Now, you can **optionally test VPN speeds** and **select the fastest VPNs** usin
 
 ## **🚀 Installation**
 
-### **1️⃣ Prerequisites**
+### **🌟 Method 1: Automated Setup Script (Recommended)**
 
-Ensure you have **Python 3** and **WireGuard** installed:
+This script automatically installs all prerequisites (WireGuard, resolvconf, iptables), VPN-Chainer via pipx, and sets up sudo access:
+
+```bash
+wget https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh
+chmod +x setup.sh
+sudo ./setup.sh
+```
+
+### **1️⃣ Prerequisites (Manual Installation)**
+
+If you prefer manual installation, ensure you have **Python 3** and **WireGuard** installed:
 
 ```bash
 sudo apt update  
@@ -62,7 +72,12 @@ sudo python3 setup.py install
 After installation, you can immediately start using VPN-Chainer:
 
 ```bash
-# Install the package
+# Method 1: Automated setup (recommended)
+wget https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh
+chmod +x setup.sh
+sudo ./setup.sh
+
+# Method 2: Manual installation
 sudo pip install vpn-chainer
 
 # Set up your WireGuard configs in /etc/wireguard/

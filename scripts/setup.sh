@@ -112,15 +112,15 @@ VPN_CHAINER_PATH=$(sudo -u "$ACTUAL_USER" which vpn-chainer 2>/dev/null || echo 
 echo "✅ Found vpn-chainer at: $VPN_CHAINER_PATH"
 
 # Check if system-wide symlink already exists
-if sudo which vpn-chainer &> /dev/null; then
+if which vpn-chainer &> /dev/null; then
     echo "✅ vpn-chainer is already available system-wide with sudo"
-    SUDO_PATH=$(sudo which vpn-chainer)
+    SUDO_PATH=$(which vpn-chainer)
     echo "   sudo path: $SUDO_PATH"
 else
     echo "🔗 Creating system-wide symlink for sudo access..."
-    sudo ln -sf "$VPN_CHAINER_PATH" /usr/local/bin/vpn-chainer
+    ln -sf "$VPN_CHAINER_PATH" /usr/local/bin/vpn-chainer
     
-    if sudo which vpn-chainer &> /dev/null; then
+    if which vpn-chainer &> /dev/null; then
         echo "✅ Successfully created symlink: /usr/local/bin/vpn-chainer -> $VPN_CHAINER_PATH"
     else
         echo "❌ Failed to create symlink"
