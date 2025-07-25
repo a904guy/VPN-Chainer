@@ -5,12 +5,15 @@
 ![VPN-Chainer](https://img.shields.io/badge/Built%20for-Debian%20%7C%20Ubuntu-blue.svg?style=flat-square)
 ![WireGuard](https://img.shields.io/badge/Powered%20by-WireGuard-orange.svg?style=flat-square)
 ![Python](https://img.shields.io/badge/Made%20with-Python%203-yellow.svg?style=flat-square)
+![PyPI](https://img.shields.io/badge/Available%20on-PyPI-green.svg?style=flat-square)
 
 ## **🔹 Overview**
 
 VPN-Chainer allows you to **chain multiple WireGuard VPNs together**, dynamically reordering routes for improved anonymity and security. It includes **auto-installation as a system service**, API-based VPN rotation, and a customizable **pre/post spin-up/down hook system**.
 
 Now, you can **optionally test VPN speeds** and **select the fastest VPNs** using `--fastest`.  
+
+**📦 Available on PyPI** - Install easily with `pip install vpn-chainer`  
 
 ---
 
@@ -36,12 +39,38 @@ sudo apt update
 sudo apt install -y python3 python3-pip wireguard  
 ```
 
-### **2️⃣ Clone & Install VPN-Chainer**
+### **2️⃣ Install VPN-Chainer from PyPI**
+
+**Easy installation via pip:**
+
+```bash
+sudo pip install vpn-chainer
+```
+
+### **🔄 Alternative: Install from Source**
+
+If you prefer to install from source:
 
 ```bash
 git clone https://github.com/a904guy/VPN-Chainer.git  
-cd vpn-chainer  
+cd VPN-Chainer  
 sudo python3 setup.py install
+```
+
+### **⚡ Quick Start**
+
+After installation, you can immediately start using VPN-Chainer:
+
+```bash
+# Install the package
+sudo pip install vpn-chainer
+
+# Set up your WireGuard configs in /etc/wireguard/
+# Then run with 2 VPNs
+sudo vpn-chainer 2
+
+# Or use the fastest VPNs
+sudo vpn-chainer 3 --fastest
 ```
 
 ---

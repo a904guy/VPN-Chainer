@@ -1,21 +1,31 @@
 # VPN-Chainer Changelog
 
-## [Unreleased]
+## [1.3.0] - 2025-01-25
 
-<<<<<<< HEAD
+### Added
+- 📦 **PyPI Package Distribution**: VPN-Chainer is now available on PyPI for easy installation via `pip install vpn-chainer`
+- ✨ **Improved Documentation**: Updated README with pip installation instructions and quick start guide
+
+### Changed
+- 🏷️ **Version Bump**: Updated to version 1.3.0 for PyPI release
+- 📚 **Installation Method**: Primary installation method is now via PyPI with source installation as alternative
+
+## [1.2.0] - Previous Release
+
+
 ### Changed
 - Changed hard-coded wg{i} interface naming to dynamic interface names derived from WireGuard config stems.
 
 ### Fixed
-=======
-### Fixed
+
 - Changed hard-coded wg{i} interface naming to dynamic interface names derived from WireGuard config stems.
+
 - **MAJOR ROUTING IMPROVEMENT**: Replaced device-only routing with gateway-aware routing for VPN chaining.
   - VPN → VPN routing now uses `via <gateway_ip> dev <interface>` instead of just `dev <interface>`
   - Added proper endpoint routing for chained VPNs through immediate lower layer gateway to prevent routing loops
   - First VPN's endpoint is routed via host's original default gateway
   - Subsequent VPNs' endpoints are routed via their immediate lower layer VPN gateway
->>>>>>> 37c54a3 (Working Chaining V2)
+  
 - Fixed VPN chaining routing issue where individual host addresses with CIDR notation were being used instead of proper network addresses for inter-VPN routing.
 - Added error handling for existing route conflicts - now replaces conflicting routes instead of failing.
 - Fixed shutdown cleanup to properly track and remove actual network routes instead of interface addresses.
