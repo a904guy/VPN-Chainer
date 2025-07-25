@@ -5,7 +5,7 @@ with open('./requirements.txt', 'r') as f:
 
 setup(
     name='vpn-chainer',
-    version='1.3.0',
+    version='1.3.2',
     description='A tool to chain multiple WireGuard VPNs and rotate them dynamically via API.',
     long_description=open("README.md", "r", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
