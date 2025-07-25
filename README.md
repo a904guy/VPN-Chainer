@@ -32,12 +32,10 @@ Now, you can **optionally test VPN speeds** and **select the fastest VPNs** usin
 
 ### **🌟 Method 1: Automated Setup Script (Recommended)**
 
-This script automatically installs all prerequisites (WireGuard, resolvconf, iptables), VPN-Chainer via pipx, and sets up sudo access:
+This script automatically installs all prerequisites (WireGuard, systemd-resolved, iptables), VPN-Chainer via pipx, and sets up sudo access:
 
 ```bash
-wget https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh
-chmod +x setup.sh
-sudo ./setup.sh
+curl -s https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh | sudo bash
 ```
 
 ### **1️⃣ Prerequisites (Manual Installation)**
@@ -73,9 +71,7 @@ After installation, you can immediately start using VPN-Chainer:
 
 ```bash
 # Method 1: Automated setup (recommended)
-wget https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh
-chmod +x setup.sh
-sudo ./setup.sh
+curl -s https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh | sudo bash
 
 # Method 2: Manual installation
 sudo pip install vpn-chainer
