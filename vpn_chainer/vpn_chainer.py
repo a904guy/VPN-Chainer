@@ -41,6 +41,7 @@ active_vpn_configs = []
 previous_routes = []  # Store interface addresses for reference
 added_routes = []  # Store actual network routes added for cleanup
 vpn_name_list = []  # List of VPN interface names for cross-referencing
+vpn_ip_list = []  # List of pure VPN IPs (without CIDR) for gateway referencing
 vpn_count = 0  # Number of VPNs requested at startup
 vpn_uuid = str(uuid.uuid4())  # Unique API key
 use_fastest = False  # Flag for speed testing
@@ -65,7 +66,33 @@ def check_and_install(pkg, apt_name=None):
 
 def list_vpn_configs():
     """List all available VPN config files."""
-    return list(Path(WG_CONFIG_DIR).glob('*.conf'))
+    try:
+        wg_path = Path(WG_CONFIG_DIR)
+        print(f"[DEBUG] Checking directory: {wg_path}")
+        print(f"[DEBUG] Directory exists: {wg_path.exists()}")
+        print(f"[DEBUG] Directory is readable: {wg_path.is_dir()}")
+        
+        configs = list(wg_path.glob('*.conf'))
+        print(f"[DEBUG] Found {len(configs)} config files")
+        
+        if not configs:
+            print(f"[ERROR] No WireGuard config files found in {WG_CONFIG_DIR}")
+            print(f"[INFO] Please ensure config files exist and have .conf extension")
+            # Let's list what files are actually there
+            try:
+                all_files = list(wg_path.iterdir())
+                print(f"[DEBUG] Files in directory: {[f.name for f in all_files]}")
+            except Exception as e:
+                print(f"[DEBUG] Could not list directory contents: {e}")
+        
+        return configs
+    except PermissionError:
+        print(f"[ERROR] Permission denied accessing {WG_CONFIG_DIR}")
+        print(f"[INFO] This script must be run as root (try: sudo")
+        sys.exit(1)
+    except Exception as e:
+        print(f"[ERROR] Failed to access {WG_CONFIG_DIR}: {e}")
+        sys.exit(1)
 
 def test_vpn_speed(config_file):
     """Bring up a VPN, run a speed test, and return the download speed."""
@@ -105,7 +132,7 @@ def select_vpn_configs(count, fastest=False):
 
 def setup_vpn():
     """Bring up VPN interfaces, set routing, and run hooks."""
-    global active_vpn_configs, previous_routes, added_routes, vpn_name_list
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list
 
     run_hook("pre-spin-up")
 
@@ -116,6 +143,7 @@ def setup_vpn():
     
     previous_routes = []
     added_routes = []
+    vpn_ip_list = []  # Initialize list for pure IPs (without CIDR)
     print("\n[SETUP] Establishing VPN Chain...")
 
     vpn_names = []
@@ -123,13 +151,56 @@ def setup_vpn():
     original_default_route = None
     
     # Save original default route before we modify anything
+    original_default_route = None
+    default_gateway = None
+    default_iface = None
     try:
         result = subprocess.run(['ip', 'route', 'show', 'default'], capture_output=True, text=True, check=True)
         if result.stdout.strip():
             original_default_route = result.stdout.strip()
             print(f"  [INFO] Saved original default route: {original_default_route}")
+            
+            # Parse the route properly - format: "default via <gateway> dev <interface> ..."
+            route_parts = original_default_route.split()
+            try:
+                via_index = route_parts.index('via')
+                dev_index = route_parts.index('dev')
+                if via_index + 1 < len(route_parts) and dev_index + 1 < len(route_parts):
+                    default_gateway = route_parts[via_index + 1]
+                    default_iface = route_parts[dev_index + 1]
+                    print(f"  [INFO] Parsed gateway: {default_gateway}, interface: {default_iface}")
+                else:
+                    print("  [WARNING] Could not parse gateway and interface from default route")
+            except (ValueError, IndexError) as e:
+                print(f"  [WARNING] Error parsing default route: {e}")
     except subprocess.CalledProcessError:
         print("  [WARNING] Could not detect original default route")
+    
+    # Pre-parse all VPN configs to extract endpoints for proper chaining
+    vpn_endpoints = []
+    for config_file in active_vpn_configs:
+        config_data = {}
+        with open(config_file, 'r') as file:
+            current_section = None
+            for line in file:
+                line = line.strip()
+                if line.startswith('[') and line.endswith(']'):
+                    current_section = line[1:-1]
+                    config_data[current_section] = {}
+                elif '=' in line and current_section:
+                    key, value = line.split('=', 1)
+                    config_data[current_section][key.strip()] = value.strip()
+        
+        peer_config = config_data.get('Peer', {})
+        endpoint = peer_config.get('Endpoint')
+        if endpoint:
+            endpoint_ip = endpoint.split(':')[0]
+            vpn_endpoints.append(endpoint_ip)
+        else:
+            vpn_endpoints.append(None)
+    
+    print(f"  [INFO] VPN Chain Order: {' -> '.join(vpn_name_list)}")
+    print(f"  [INFO] Endpoint IPs: {' -> '.join([str(e) for e in vpn_endpoints])}")
 
     for i, config_file in enumerate(active_vpn_configs):
         # Parse WireGuard config manually
@@ -160,6 +231,11 @@ def setup_vpn():
         endpoint = peer_config.get('Endpoint')
         allowed_ips = peer_config.get('AllowedIPs', '0.0.0.0/0')
         persistent_keepalive = peer_config.get('PersistentKeepalive', '25')
+        
+        # Extract pure IP without CIDR and add to vpn_ip_list for gateway referencing
+        if address:
+            pure_ip = address.split('/')[0]  # Strip CIDR notation
+            vpn_ip_list.append(pure_ip)
         
         vpn_ips.append(address)
         print(f"  - Setting up VPN [{vpn_name}] at {address}...")
@@ -202,24 +278,22 @@ PersistentKeepalive = {persistent_keepalive}
             pass
 
         if i > 0:
-            # For chained VPNs: route traffic from this VPN through the previous one
+            # For chained VPNs: route this VPN's endpoint through the previous VPN
             previous_vpn_name = vpn_name_list[i-1]
             
             print(f"    [ROUTE] Setting up chaining: {vpn_name} -> {previous_vpn_name} -> Internet")
             
-            # Route all internet traffic from this VPN through the previous VPN
+            # Route this VPN's endpoint through the previous VPN interface to create proper chaining
+            endpoint_ip = endpoint.split(':')[0]  # Extract IP from endpoint
+            print(f"    [ROUTE] Adding endpoint route for {endpoint_ip} through {previous_vpn_name}")
             try:
-                subprocess.run(['ip', 'route', 'add', '0.0.0.0/1', 'dev', previous_vpn_name], check=True)
-                subprocess.run(['ip', 'route', 'add', '128.0.0.0/1', 'dev', previous_vpn_name], check=True)
-                added_routes.extend([f'0.0.0.0/1 dev {previous_vpn_name}', f'128.0.0.0/1 dev {previous_vpn_name}'])
+                subprocess.run(['ip', 'route', 'add', endpoint_ip, 'dev', previous_vpn_name], check=True)
+                added_routes.append(f'{endpoint_ip} dev {previous_vpn_name}')
             except subprocess.CalledProcessError as e:
                 if e.returncode == 2:
-                    print(f"    [INFO] Internet routes already exist, replacing...")
-                    subprocess.run(['ip', 'route', 'replace', '0.0.0.0/1', 'dev', previous_vpn_name], check=True)
-                    subprocess.run(['ip', 'route', 'replace', '128.0.0.0/1', 'dev', previous_vpn_name], check=True)
-                    added_routes.extend([f'0.0.0.0/1 dev {previous_vpn_name}', f'128.0.0.0/1 dev {previous_vpn_name}'])
+                    print(f"    [INFO] Endpoint route already exists")
                 else:
-                    raise
+                    print(f"    [WARNING] Could not add endpoint route: {e}")
             
             # Set up iptables rules for forwarding between VPN interfaces
             subprocess.run(['iptables', '-A', 'FORWARD', '-i', vpn_name, '-o', previous_vpn_name, '-j', 'ACCEPT'], check=True)
@@ -228,41 +302,49 @@ PersistentKeepalive = {persistent_keepalive}
             subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', previous_vpn_name, '-j', 'MASQUERADE'], check=True)
         
         elif i == 0:
-            # First VPN: route all internet traffic through it
-            current_address = address.split('/')[0]
-            print(f"    [ROUTE] Setting up default route through first VPN {vpn_name}")
+            # First VPN: route its endpoint through original gateway and set up NAT
+            print(f"    [ROUTE] Setting up first VPN {vpn_name}")
             
-            # First, add a specific route for the WireGuard endpoint to avoid routing loops
+            # Route the first VPN's endpoint through the original gateway to avoid loops
             endpoint_ip = endpoint.split(':')[0]  # Extract IP from endpoint
             print(f"    [ROUTE] Adding endpoint route for {endpoint_ip} via original gateway")
             try:
                 # Route WireGuard endpoint traffic through original default route
-                subprocess.run(['ip', 'route', 'add', endpoint_ip, 'via', '10.1.10.1', 'dev', 'eno2'], check=True)
-                added_routes.append(f'{endpoint_ip} via 10.1.10.1 dev eno2')
+                if default_gateway and default_iface:
+                    subprocess.run(['ip', 'route', 'add', endpoint_ip, 'via', default_gateway, 'dev', default_iface], check=True)
+                    added_routes.append(f'{endpoint_ip} via {default_gateway} dev {default_iface}')
+                else:
+                    print(f"    [WARNING] Could not add endpoint route: missing gateway or interface info")
             except subprocess.CalledProcessError as e:
                 if e.returncode == 2:
                     print(f"    [INFO] Endpoint route already exists")
                 else:
                     print(f"    [WARNING] Could not add endpoint route: {e}")
             
-            try:
-                # Use split default routes to override existing default
-                subprocess.run(['ip', 'route', 'add', '0.0.0.0/1', 'dev', vpn_name], check=True)
-                subprocess.run(['ip', 'route', 'add', '128.0.0.0/1', 'dev', vpn_name], check=True)
-                added_routes.extend([f'0.0.0.0/1 dev {vpn_name}', f'128.0.0.0/1 dev {vpn_name}'])
-            except subprocess.CalledProcessError as e:
-                if e.returncode == 2:
-                    print(f"    [INFO] Default routes already exist, replacing...")
-                    subprocess.run(['ip', 'route', 'replace', '0.0.0.0/1', 'dev', vpn_name], check=True)
-                    subprocess.run(['ip', 'route', 'replace', '128.0.0.0/1', 'dev', vpn_name], check=True)
-                    added_routes.extend([f'0.0.0.0/1 dev {vpn_name}', f'128.0.0.0/1 dev {vpn_name}'])
-                else:
-                    raise
-            
             # Set up NAT for the first VPN
             subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', vpn_name, '-j', 'MASQUERADE'], check=True)
 
         previous_routes.append(address)
+
+    # After all VPNs are set up, route all internet traffic through the LAST VPN in the chain
+    if vpn_count > 0:
+        last_vpn_name = vpn_name_list[-1]
+        print(f"\n  [FINAL ROUTE] Routing all internet traffic through final VPN: {last_vpn_name}")
+        try:
+            # Use split default routes to override existing default - route through the last VPN
+            subprocess.run(['ip', 'route', 'add', '0.0.0.0/1', 'dev', last_vpn_name], check=True)
+            subprocess.run(['ip', 'route', 'add', '128.0.0.0/1', 'dev', last_vpn_name], check=True)
+            added_routes.extend([f'0.0.0.0/1 dev {last_vpn_name}', f'128.0.0.0/1 dev {last_vpn_name}'])
+            print(f"  [FINAL ROUTE] Added internet routes through {last_vpn_name}")
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 2:
+                print(f"  [INFO] Default routes already exist, replacing...")
+                subprocess.run(['ip', 'route', 'replace', '0.0.0.0/1', 'dev', last_vpn_name], check=True)
+                subprocess.run(['ip', 'route', 'replace', '128.0.0.0/1', 'dev', last_vpn_name], check=True)
+                added_routes.extend([f'0.0.0.0/1 dev {last_vpn_name}', f'128.0.0.0/1 dev {last_vpn_name}'])
+                print(f"  [FINAL ROUTE] Replaced internet routes through {last_vpn_name}")
+            else:
+                raise
 
     # Enable global IP forwarding
     subprocess.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], check=True)
@@ -282,7 +364,7 @@ PersistentKeepalive = {persistent_keepalive}
 
 def undo_vpn():
     """Shutdown VPN interfaces, remove routing, and run hooks."""
-    global active_vpn_configs, previous_routes, added_routes, vpn_name_list
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list
 
     run_hook("pre-spin-down")
 
@@ -302,14 +384,23 @@ def undo_vpn():
     # Clean up the actual network routes we added
     for route in added_routes:
         try:
-            # Parse the route string to get just the network part
+            # Parse the route string to reconstruct the delete command
             route_parts = route.split()
             if len(route_parts) >= 1:
                 network = route_parts[0]
-                subprocess.run(['ip', 'route', 'del', network], check=True)
-                print(f"  - Removed route: {network}")
+                delete_cmd = ['ip', 'route', 'del', network]
+                
+                # Check if route has 'via' clause and add it to delete command
+                if 'via' in route_parts:
+                    via_index = route_parts.index('via')
+                    if via_index + 1 < len(route_parts):
+                        gateway = route_parts[via_index + 1]
+                        delete_cmd.extend(['via', gateway])
+                
+                subprocess.run(delete_cmd, check=True)
+                print(f"  - Removed route: {' '.join(delete_cmd[3:])}")
         except subprocess.CalledProcessError as e:
-            if e.returncode == 2:  # Route doesn't exist
+            if e.returncode == 2:  # Route doesn't exist (idempotent)
                 print(f"  - Route {route} already removed")
             else:
                 print(f"  - Warning: Failed to remove route {route}: {e}")
@@ -334,6 +425,7 @@ def undo_vpn():
     previous_routes = []
     added_routes = []
     vpn_name_list = []
+    vpn_ip_list = []
 
 @app.route('/rotate_vpn', methods=['GET'])
 def rotate_vpn():
@@ -404,7 +496,9 @@ WantedBy=multi-user.target
     subprocess.run(["journalctl", "-u", "vpn-chainer", "-f"])
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for the vpn-chainer command."""
+    global vpn_count, use_fastest
     
     setproctitle("VPN-Chainer")
 
@@ -432,5 +526,14 @@ if __name__ == "__main__":
     setup_vpn()
 
     server_ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True).stdout.strip().split()[0]
-    print(f"[INFO] VPN-Chainer API running at: http://{server_ip}:5001/rotate_vpn?key={vpn_uuid}\n")
-    app.run(host='0.0.0.0', port=5001)
+    print(f"[INFO] VPN-Chainer API running at: http://{server_ip}:5000/rotate_vpn?key={vpn_uuid}\n")
+    try:
+        app.run(host='0.0.0.0', port=5000)
+    except Exception as e:
+        print(f"[ERROR] Flask app failed to start: {e}")
+        undo_vpn()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
