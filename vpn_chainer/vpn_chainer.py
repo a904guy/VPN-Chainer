@@ -64,6 +64,33 @@ def check_and_install(pkg, apt_name=None):
         else:
             subprocess.run(['apt', 'install', '-y', pkg], check=True)
 
+def configure_dns(vpn_name, dns_server):
+    """Configure DNS for VPN interface using available resolver."""
+    try:
+        # Try resolvconf first (if available)
+        if subprocess.run(['which', 'resolvconf'], capture_output=True).returncode == 0:
+            subprocess.run(['resolvconf', '-a', vpn_name, '-m', '0', '-x'], 
+                         input=f'nameserver {dns_server}\n', text=True, check=False)
+        # Fallback to systemd-resolved
+        elif subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], capture_output=True).returncode == 0:
+            # For systemd-resolved, we can use resolvectl to set DNS for the interface
+            subprocess.run(['resolvectl', 'dns', vpn_name, dns_server], check=False)
+    except Exception as e:
+        print(f"[WARNING] Could not configure DNS for {vpn_name}: {e}")
+
+def remove_dns(vpn_name):
+    """Remove DNS configuration for VPN interface."""
+    try:
+        # Try resolvconf first (if available)
+        if subprocess.run(['which', 'resolvconf'], capture_output=True).returncode == 0:
+            subprocess.run(['resolvconf', '-d', vpn_name, '-f'], check=False)
+        # Fallback to systemd-resolved
+        elif subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], capture_output=True).returncode == 0:
+            # For systemd-resolved, revert DNS for the interface
+            subprocess.run(['resolvectl', 'revert', vpn_name], check=False)
+    except Exception as e:
+        print(f"[WARNING] Could not remove DNS for {vpn_name}: {e}")
+
 def list_vpn_configs():
     """List all available VPN config files."""
     try:
@@ -272,10 +299,7 @@ PersistentKeepalive = {persistent_keepalive}
         time.sleep(3)  # Give WireGuard time to establish connection
         
         # Set up DNS for this interface
-        try:
-            subprocess.run(['resolvconf', '-a', vpn_name, '-m', '0', '-x'], input=f'nameserver {dns}\n', text=True, check=False)
-        except:
-            pass
+        configure_dns(vpn_name, dns)
 
         if i > 0:
             # For chained VPNs: route this VPN's endpoint through the previous VPN
@@ -374,8 +398,8 @@ def undo_vpn():
     for vpn_name in vpn_name_list:
         print(f"  - Deactivating VPN [{vpn_name}]...")
         try:
-            # Remove resolvconf DNS settings
-            subprocess.run(['resolvconf', '-d', vpn_name, '-f'], check=False)
+            # Remove DNS settings
+            remove_dns(vpn_name)
             # Delete the interface
             subprocess.run(['ip', 'link', 'delete', vpn_name], check=False)
         except Exception as e:
@@ -503,7 +527,12 @@ def main():
     setproctitle("VPN-Chainer")
 
     check_and_install('wg', 'wireguard')
-    check_and_install('resolvconf')
+    # Check for DNS resolver (prefer systemd-resolved, fallback to resolvconf)
+    if not subprocess.run(['which', 'resolvconf'], capture_output=True).returncode == 0:
+        if not subprocess.run(['systemctl', 'is-active', 'systemd-resolved'], capture_output=True).returncode == 0:
+            print("[INFO] No DNS resolver found. Installing systemd-resolved...")
+            subprocess.run(['apt', 'update'], check=True)
+            subprocess.run(['apt', 'install', '-y', 'systemd-resolved'], check=True)
     check_and_install('iptables')
 
     ensure_hooks_directory()

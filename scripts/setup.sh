@@ -43,18 +43,22 @@ else
     echo "✅ WireGuard is already installed"
 fi
 
-# Check and install resolvconf
-if ! package_installed resolvconf; then
-    echo "📥 Installing resolvconf..."
-    apt install -y resolvconf
-    if package_installed resolvconf; then
-        echo "✅ resolvconf installed successfully"
+# Check and install DNS resolver (prefer systemd-resolved)
+if package_installed systemd-resolved; then
+    echo "✅ systemd-resolved is already installed"
+elif package_installed resolvconf; then
+    echo "✅ resolvconf is already installed"
+elif command_exists systemctl && systemctl is-active systemd-resolved &>/dev/null; then
+    echo "✅ systemd-resolved is already running"
+else
+    echo "📥 Installing DNS resolver (systemd-resolved)..."
+    apt install -y systemd-resolved
+    if package_installed systemd-resolved || systemctl is-active systemd-resolved &>/dev/null; then
+        echo "✅ systemd-resolved installed successfully"
     else
-        echo "❌ Failed to install resolvconf"
+        echo "❌ Failed to install systemd-resolved"
         exit 1
     fi
-else
-    echo "✅ resolvconf is already installed"
 fi
 
 # Check and install iptables

@@ -1,5 +1,18 @@
 # VPN-Chainer Changelog
 
+## [1.3.2] - 2025-07-25
+
+### Enhanced
+- 🚀 **Improved Installation Experience**: Made automated setup script the #1 recommended installation method
+- 📦 **Complete Prerequisites**: Setup script now automatically installs all required packages (WireGuard, systemd-resolved/resolvconf, iptables)
+- 🔧 **Modern DNS Support**: Updated to prefer systemd-resolved over legacy resolvconf for better Ubuntu compatibility
+- 📖 **Streamlined Documentation**: Reorganized README to prioritize the automated setup process
+- ⚡ **Sudo Requirement**: Setup script now requires sudo execution for streamlined installation
+
+### Fixed
+- 🔧 **DNS Resolver Compatibility**: Fixed installation issues on modern Ubuntu where systemd-resolved is preferred over resolvconf
+- 🛠️ **Flexible DNS Configuration**: Added fallback logic to work with both resolvconf and systemd-resolved
+
 ## [1.3.0] - 2025-01-25
 
 ### Added
@@ -11,10 +24,6 @@
 - 📚 **Installation Method**: Primary installation method is now via PyPI with source installation as alternative
 
 ## [1.2.0] - Previous Release
-
-
-### Changed
-- Changed hard-coded wg{i} interface naming to dynamic interface names derived from WireGuard config stems.
 
 ### Fixed
 
