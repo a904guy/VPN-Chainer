@@ -19,20 +19,20 @@ package_installed() {
 echo "🔍 Checking prerequisites..."
 
 # Check if running as root for apt operations
-if [[ $EUID -eq 0 ]]; then
-    echo "❌ Please run this script as a regular user (not root)"
-    echo "   The script will use sudo when needed"
+if [[ $EUID -ne 0 ]]; then
+    echo "❌ This script must be run as root (use sudo)"
+    echo "   Example: sudo ./setup.sh"
     exit 1
 fi
 
 # Update package list
 echo "📦 Updating package list..."
-sudo apt update
+apt update
 
 # Check and install WireGuard
 if ! package_installed wireguard; then
     echo "📥 Installing WireGuard..."
-    sudo apt install -y wireguard
+    apt install -y wireguard
     if package_installed wireguard; then
         echo "✅ WireGuard installed successfully"
     else
@@ -46,7 +46,7 @@ fi
 # Check and install resolvconf
 if ! package_installed resolvconf; then
     echo "📥 Installing resolvconf..."
-    sudo apt install -y resolvconf
+    apt install -y resolvconf
     if package_installed resolvconf; then
         echo "✅ resolvconf installed successfully"
     else
@@ -60,7 +60,7 @@ fi
 # Check and install iptables
 if ! package_installed iptables; then
     echo "📥 Installing iptables..."
-    sudo apt install -y iptables
+    apt install -y iptables
     if package_installed iptables; then
         echo "✅ iptables installed successfully"
     else
@@ -74,7 +74,7 @@ fi
 # Check and install pipx
 if ! package_installed pipx; then
     echo "📥 Installing pipx..."
-    sudo apt install -y pipx
+    apt install -y pipx
     if package_installed pipx; then
         echo "✅ pipx installed successfully"
     else
@@ -85,13 +85,17 @@ else
     echo "✅ pipx is already installed"
 fi
 
+# Get the actual user (not root) for pipx operations
+ACTUAL_USER=${SUDO_USER:-$USER}
+ACTUAL_HOME=$(eval echo ~$ACTUAL_USER)
+
 # Check if vpn-chainer is already installed via pipx
-if pipx list 2>/dev/null | grep -q "vpn-chainer"; then
+if sudo -u "$ACTUAL_USER" pipx list 2>/dev/null | grep -q "vpn-chainer"; then
     echo "✅ vpn-chainer is already installed via pipx"
 else
     echo "📥 Installing vpn-chainer via pipx..."
-    pipx install vpn-chainer
-    if pipx list 2>/dev/null | grep -q "vpn-chainer"; then
+    sudo -u "$ACTUAL_USER" pipx install vpn-chainer
+    if sudo -u "$ACTUAL_USER" pipx list 2>/dev/null | grep -q "vpn-chainer"; then
         echo "✅ vpn-chainer installed successfully via pipx"
     else
         echo "❌ Failed to install vpn-chainer via pipx"
@@ -101,22 +105,10 @@ fi
 
 # Ensure pipx path is configured
 echo "🔧 Configuring pipx PATH..."
-pipx ensurepath
+sudo -u "$ACTUAL_USER" pipx ensurepath
 
-# Source bashrc to update PATH for current session
-if [ -f ~/.bashrc ]; then
-    source ~/.bashrc
-fi
-
-# Check if vpn-chainer is now available
-if ! command -v vpn-chainer &> /dev/null; then
-    echo "❌ vpn-chainer not found in PATH after installation"
-    echo "   Please restart your terminal or run: source ~/.bashrc"
-    echo "   Then check with: which vpn-chainer"
-    exit 1
-fi
-
-VPN_CHAINER_PATH=$(which vpn-chainer)
+# Get the vpn-chainer path from the actual user's environment
+VPN_CHAINER_PATH=$(sudo -u "$ACTUAL_USER" which vpn-chainer 2>/dev/null || echo "$ACTUAL_HOME/.local/bin/vpn-chainer")
 echo "✅ Found vpn-chainer at: $VPN_CHAINER_PATH"
 
 # Check if system-wide symlink already exists
