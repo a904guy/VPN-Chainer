@@ -38,7 +38,9 @@ SERVICE_FILE_PATH = "/etc/systemd/system/vpn-chainer.service"
 
 # Global Variables
 active_vpn_configs = []
-previous_routes = []
+previous_routes = []  # Store interface addresses for reference
+added_routes = []  # Store actual network routes added for cleanup
+vpn_name_list = []  # List of VPN interface names for cross-referencing
 vpn_count = 0  # Number of VPNs requested at startup
 vpn_uuid = str(uuid.uuid4())  # Unique API key
 use_fastest = False  # Flag for speed testing
@@ -103,68 +105,235 @@ def select_vpn_configs(count, fastest=False):
 
 def setup_vpn():
     """Bring up VPN interfaces, set routing, and run hooks."""
-    global active_vpn_configs, previous_routes
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list
 
     run_hook("pre-spin-up")
 
     active_vpn_configs = select_vpn_configs(vpn_count, fastest=use_fastest)
 
+    # Build list of vpn interface names at start of chaining routine
+    vpn_name_list = [config_file.stem for config_file in active_vpn_configs]
+    
     previous_routes = []
+    added_routes = []
     print("\n[SETUP] Establishing VPN Chain...")
 
     vpn_names = []
     vpn_ips = []
+    original_default_route = None
+    
+    # Save original default route before we modify anything
+    try:
+        result = subprocess.run(['ip', 'route', 'show', 'default'], capture_output=True, text=True, check=True)
+        if result.stdout.strip():
+            original_default_route = result.stdout.strip()
+            print(f"  [INFO] Saved original default route: {original_default_route}")
+    except subprocess.CalledProcessError:
+        print("  [WARNING] Could not detect original default route")
 
     for i, config_file in enumerate(active_vpn_configs):
+        # Parse WireGuard config manually
+        config_data = {}
         with open(config_file, 'r') as file:
-            config = file.read()
+            current_section = None
+            for line in file:
+                line = line.strip()
+                if line.startswith('[') and line.endswith(']'):
+                    current_section = line[1:-1]
+                    config_data[current_section] = {}
+                elif '=' in line and current_section:
+                    key, value = line.split('=', 1)
+                    config_data[current_section][key.strip()] = value.strip()
 
-        vpn_name = config_file.stem
+        vpn_name = vpn_name_list[i]
         vpn_names.append(vpn_name)
-
-        address_line = next(line for line in config.splitlines() if line.startswith("Address"))
-        address = address_line.split("=")[1].strip()
+        
+        interface_config = config_data.get('Interface', {})
+        peer_config = config_data.get('Peer', {})
+        
+        address = interface_config.get('Address')
+        private_key = interface_config.get('PrivateKey')
+        listen_port = interface_config.get('ListenPort', '51820')
+        dns = interface_config.get('DNS', '1.1.1.1')
+        
+        public_key = peer_config.get('PublicKey')
+        endpoint = peer_config.get('Endpoint')
+        allowed_ips = peer_config.get('AllowedIPs', '0.0.0.0/0')
+        persistent_keepalive = peer_config.get('PersistentKeepalive', '25')
+        
         vpn_ips.append(address)
+        print(f"  - Setting up VPN [{vpn_name}] at {address}...")
+        
+        # Create WireGuard interface manually (without wg-quick routing)
+        subprocess.run(['ip', 'link', 'add', vpn_name, 'type', 'wireguard'], check=True)
+        subprocess.run(['ip', 'address', 'add', address, 'dev', vpn_name], check=True)
+        
+        # Configure WireGuard (only core settings, not wg-quick settings like MTU, DNS, Address)
+        wg_config = f"""[Interface]
+PrivateKey = {private_key}
+ListenPort = {listen_port}
 
-        print(f"  - Activating VPN [{vpn_name}] at {address}...")
-        subprocess.run(['wg-quick', 'up', str(config_file)], check=True)
+[Peer]
+PublicKey = {public_key}
+Endpoint = {endpoint}
+AllowedIPs = {allowed_ips}
+PersistentKeepalive = {persistent_keepalive}
+"""
+        
+        # Apply WireGuard configuration
+        proc = subprocess.Popen(['wg', 'setconf', vpn_name, '/dev/stdin'], stdin=subprocess.PIPE, text=True)
+        proc.communicate(input=wg_config)
+        
+        # Bring up the interface
+        subprocess.run(['ip', 'link', 'set', vpn_name, 'up'], check=True)
+        
+        # Enable IP forwarding for this interface
+        subprocess.run(['sysctl', '-w', f'net.ipv4.conf.{vpn_name}.forwarding=1'], check=True)
+        
+        # Wait for WireGuard handshake to establish
+        print(f"    [INFO] Waiting for WireGuard handshake...")
+        import time
+        time.sleep(3)  # Give WireGuard time to establish connection
+        
+        # Set up DNS for this interface
+        try:
+            subprocess.run(['resolvconf', '-a', vpn_name, '-m', '0', '-x'], input=f'nameserver {dns}\n', text=True, check=False)
+        except:
+            pass
 
         if i > 0:
-            previous_address = previous_routes[i - 1]
-            subprocess.run(['ip', 'route', 'add', f'{address}/24', 'via', previous_address, 'dev', f'wg{i}'], check=True)
+            # For chained VPNs: route traffic from this VPN through the previous one
+            previous_vpn_name = vpn_name_list[i-1]
+            
+            print(f"    [ROUTE] Setting up chaining: {vpn_name} -> {previous_vpn_name} -> Internet")
+            
+            # Route all internet traffic from this VPN through the previous VPN
+            try:
+                subprocess.run(['ip', 'route', 'add', '0.0.0.0/1', 'dev', previous_vpn_name], check=True)
+                subprocess.run(['ip', 'route', 'add', '128.0.0.0/1', 'dev', previous_vpn_name], check=True)
+                added_routes.extend([f'0.0.0.0/1 dev {previous_vpn_name}', f'128.0.0.0/1 dev {previous_vpn_name}'])
+            except subprocess.CalledProcessError as e:
+                if e.returncode == 2:
+                    print(f"    [INFO] Internet routes already exist, replacing...")
+                    subprocess.run(['ip', 'route', 'replace', '0.0.0.0/1', 'dev', previous_vpn_name], check=True)
+                    subprocess.run(['ip', 'route', 'replace', '128.0.0.0/1', 'dev', previous_vpn_name], check=True)
+                    added_routes.extend([f'0.0.0.0/1 dev {previous_vpn_name}', f'128.0.0.0/1 dev {previous_vpn_name}'])
+                else:
+                    raise
+            
+            # Set up iptables rules for forwarding between VPN interfaces
+            subprocess.run(['iptables', '-A', 'FORWARD', '-i', vpn_name, '-o', previous_vpn_name, '-j', 'ACCEPT'], check=True)
+            subprocess.run(['iptables', '-A', 'FORWARD', '-i', previous_vpn_name, '-o', vpn_name, '-j', 'ACCEPT'], check=True)
+            # NAT traffic going from this VPN to the previous one
+            subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', previous_vpn_name, '-j', 'MASQUERADE'], check=True)
+        
+        elif i == 0:
+            # First VPN: route all internet traffic through it
+            current_address = address.split('/')[0]
+            print(f"    [ROUTE] Setting up default route through first VPN {vpn_name}")
+            
+            # First, add a specific route for the WireGuard endpoint to avoid routing loops
+            endpoint_ip = endpoint.split(':')[0]  # Extract IP from endpoint
+            print(f"    [ROUTE] Adding endpoint route for {endpoint_ip} via original gateway")
+            try:
+                # Route WireGuard endpoint traffic through original default route
+                subprocess.run(['ip', 'route', 'add', endpoint_ip, 'via', '10.1.10.1', 'dev', 'eno2'], check=True)
+                added_routes.append(f'{endpoint_ip} via 10.1.10.1 dev eno2')
+            except subprocess.CalledProcessError as e:
+                if e.returncode == 2:
+                    print(f"    [INFO] Endpoint route already exists")
+                else:
+                    print(f"    [WARNING] Could not add endpoint route: {e}")
+            
+            try:
+                # Use split default routes to override existing default
+                subprocess.run(['ip', 'route', 'add', '0.0.0.0/1', 'dev', vpn_name], check=True)
+                subprocess.run(['ip', 'route', 'add', '128.0.0.0/1', 'dev', vpn_name], check=True)
+                added_routes.extend([f'0.0.0.0/1 dev {vpn_name}', f'128.0.0.0/1 dev {vpn_name}'])
+            except subprocess.CalledProcessError as e:
+                if e.returncode == 2:
+                    print(f"    [INFO] Default routes already exist, replacing...")
+                    subprocess.run(['ip', 'route', 'replace', '0.0.0.0/1', 'dev', vpn_name], check=True)
+                    subprocess.run(['ip', 'route', 'replace', '128.0.0.0/1', 'dev', vpn_name], check=True)
+                    added_routes.extend([f'0.0.0.0/1 dev {vpn_name}', f'128.0.0.0/1 dev {vpn_name}'])
+                else:
+                    raise
+            
+            # Set up NAT for the first VPN
+            subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', vpn_name, '-j', 'MASQUERADE'], check=True)
 
         previous_routes.append(address)
 
-        subprocess.run(['iptables', '-A', 'FORWARD', '-i', f'wg{i}', '-o', f'wg{i + 1}', '-j', 'ACCEPT'], check=True)
+    # Enable global IP forwarding
+    subprocess.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], check=True)
+    
+    # Flush DNS cache to force re-resolution through VPN
+    try:
+        subprocess.run(['systemctl', 'restart', 'systemd-resolved'], check=False)
+    except:
+        pass
 
     run_hook("post-spin-up")
 
     print("\n[INFO] VPN Chain Established Successfully!")
     print(f"  [VPN Route]  {' -> '.join(vpn_names)}")
-    print(f"  [IP Route]   {' -> '.join(vpn_ips)}\n")
+    print(f"  [IP Route]   {' -> '.join(vpn_ips)}")
+    print(f"  [INFO] All internet traffic now routed through VPN chain\n")
 
 def undo_vpn():
     """Shutdown VPN interfaces, remove routing, and run hooks."""
-    global active_vpn_configs, previous_routes
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list
 
     run_hook("pre-spin-down")
 
     print("\n[SHUTDOWN] Cleaning up VPNs...")
 
-    for config_file in active_vpn_configs:
-        vpn_name = config_file.stem
+    # Clean up manually created WireGuard interfaces
+    for vpn_name in vpn_name_list:
         print(f"  - Deactivating VPN [{vpn_name}]...")
-        subprocess.run(['wg-quick', 'down', str(config_file)], check=True)
+        try:
+            # Remove resolvconf DNS settings
+            subprocess.run(['resolvconf', '-d', vpn_name, '-f'], check=False)
+            # Delete the interface
+            subprocess.run(['ip', 'link', 'delete', vpn_name], check=False)
+        except Exception as e:
+            print(f"    [DEBUG] Error cleaning up {vpn_name}: {e}")
 
-    for route in previous_routes:
-        subprocess.run(['ip', 'route', 'del', route], check=True)
+    # Clean up the actual network routes we added
+    for route in added_routes:
+        try:
+            # Parse the route string to get just the network part
+            route_parts = route.split()
+            if len(route_parts) >= 1:
+                network = route_parts[0]
+                subprocess.run(['ip', 'route', 'del', network], check=True)
+                print(f"  - Removed route: {network}")
+        except subprocess.CalledProcessError as e:
+            if e.returncode == 2:  # Route doesn't exist
+                print(f"  - Route {route} already removed")
+            else:
+                print(f"  - Warning: Failed to remove route {route}: {e}")
 
+    # Clean up iptables rules
+    print("  - Cleaning up iptables rules...")
     subprocess.run(['iptables', '-F'], check=True)
+    subprocess.run(['iptables', '-t', 'nat', '-F'], check=True)
+    subprocess.run(['iptables', '-X'], check=False)  # Don't fail if no custom chains
+    subprocess.run(['iptables', '-t', 'nat', '-X'], check=False)
+    
+    # Restart DNS to restore normal resolution
+    try:
+        subprocess.run(['systemctl', 'restart', 'systemd-resolved'], check=False)
+        print("  - Restarted DNS resolver")
+    except:
+        pass
 
     run_hook("post-spin-down")
 
     active_vpn_configs = []
     previous_routes = []
+    added_routes = []
+    vpn_name_list = []
 
 @app.route('/rotate_vpn', methods=['GET'])
 def rotate_vpn():
@@ -263,5 +432,5 @@ if __name__ == "__main__":
     setup_vpn()
 
     server_ip = subprocess.run(['hostname', '-I'], capture_output=True, text=True).stdout.strip().split()[0]
-    print(f"[INFO] VPN-Chainer API running at: http://{server_ip}:5000/rotate_vpn?key={vpn_uuid}\n")
-    app.run(host='0.0.0.0', port=5000)
+    print(f"[INFO] VPN-Chainer API running at: http://{server_ip}:5001/rotate_vpn?key={vpn_uuid}\n")
+    app.run(host='0.0.0.0', port=5001)
