@@ -30,7 +30,7 @@ Now, you can **optionally test VPN speeds** and **select the fastest VPNs** usin
 
 ## **🚀 Installation**
 
-### **🌟 Method 1: Automated Setup Script (Recommended)**
+### **🌟 Automated Setup Script (Recommended)**
 
 This script automatically installs all prerequisites (WireGuard, systemd-resolved, iptables), VPN-Chainer via pipx, and sets up sudo access:
 
@@ -38,7 +38,7 @@ This script automatically installs all prerequisites (WireGuard, systemd-resolve
 curl -s https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh | sudo bash
 ```
 
-### **1️⃣ Prerequisites (Manual Installation)**
+### ** Prerequisites (Manual Installation)**
 
 If you prefer manual installation, ensure you have **Python 3** and **WireGuard** installed:
 
@@ -47,7 +47,7 @@ sudo apt update
 sudo apt install -y python3 python3-pip wireguard  
 ```
 
-### **2️⃣ Install VPN-Chainer from PyPI**
+### ** Install VPN-Chainer from PyPI**
 
 **Easy installation via pip:**
 
@@ -55,7 +55,7 @@ sudo apt install -y python3 python3-pip wireguard
 sudo pip install vpn-chainer
 ```
 
-### **🔄 Alternative: Install from Source**
+### ** Alternative: Install from Source**
 
 If you prefer to install from source:
 
@@ -63,25 +63,6 @@ If you prefer to install from source:
 git clone https://github.com/a904guy/VPN-Chainer.git  
 cd VPN-Chainer  
 sudo python3 setup.py install
-```
-
-### **⚡ Quick Start**
-
-After installation, you can immediately start using VPN-Chainer:
-
-```bash
-# Method 1: Automated setup (recommended)
-curl -s https://raw.githubusercontent.com/a904guy/VPN-Chainer/main/scripts/setup.sh | sudo bash
-
-# Method 2: Manual installation
-sudo pip install vpn-chainer
-
-# Set up your WireGuard configs in /etc/wireguard/
-# Then run with 2 VPNs
-sudo vpn-chainer 2
-
-# Or use the fastest VPNs
-sudo vpn-chainer 3 --fastest
 ```
 
 ---
@@ -135,6 +116,94 @@ To **view logs**:
 ```bash
 sudo journalctl -u vpn-chainer -f  
 ```
+
+---
+
+## **📋 Example Execution**
+
+Here's what a typical VPN-Chainer session looks like when chaining 5 VPNs: (Note: PII has been randomized)
+
+```bash
+$ sudo vpn-chainer 5
+[HOOK] No pre-spin-up script found. Skipping.
+[DEBUG] Checking directory: /etc/wireguard
+[DEBUG] Found 12 config files
+
+[SETUP] Establishing VPN Chain...
+  [INFO] Saved original default route: default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.100 metric 100
+  [INFO] Parsed gateway: 192.168.1.1, interface: eth0
+  [INFO] VPN Chain Order: Singapore -> Germany -> Netherlands -> Canada -> Japan
+  [INFO] Endpoint IPs: 45.76.123.45 -> 185.220.101.67 -> 91.132.144.89 -> 198.244.131.205 -> 103.195.236.78
+  - Setting up VPN [Singapore] at 10.13.9.142/24...
+net.ipv4.conf.Singapore.forwarding = 1
+    [INFO] Waiting for WireGuard handshake...
+    [ROUTE] Setting up first VPN Singapore
+    [ROUTE] Adding endpoint route for 45.76.123.45 via original gateway
+  - Setting up VPN [Germany] at 10.13.79.88/24...
+net.ipv4.conf.Germany.forwarding = 1
+    [INFO] Waiting for WireGuard handshake...
+    [ROUTE] Setting up chaining: Germany -> Singapore -> Internet
+    [ROUTE] Adding endpoint route for 185.220.101.67 through Singapore
+  - Setting up VPN [Netherlands] at 10.13.58.203/24...
+net.ipv4.conf.Netherlands.forwarding = 1
+    [INFO] Waiting for WireGuard handshake...
+    [ROUTE] Setting up chaining: Netherlands -> Germany -> Internet
+    [ROUTE] Adding endpoint route for 91.132.144.89 through Germany
+  - Setting up VPN [Canada] at 10.13.114.51/24...
+net.ipv4.conf.Canada.forwarding = 1
+    [INFO] Waiting for WireGuard handshake...
+    [ROUTE] Setting up chaining: Canada -> Netherlands -> Internet
+    [ROUTE] Adding endpoint route for 198.244.131.205 through Netherlands
+  - Setting up VPN [Japan] at 10.13.80.177/24...
+net.ipv4.conf.Japan.forwarding = 1
+    [INFO] Waiting for WireGuard handshake...
+    [ROUTE] Setting up chaining: Japan -> Canada -> Internet
+    [ROUTE] Adding endpoint route for 103.195.236.78 through Canada
+
+  [FINAL ROUTE] Routing all internet traffic through final VPN: Japan
+  [FINAL ROUTE] Added internet routes through Japan
+net.ipv4.ip_forward = 1
+[HOOK] No post-spin-up script found. Skipping.
+
+[INFO] VPN Chain Established Successfully!
+  [VPN Route]  Singapore -> Germany -> Netherlands -> Canada -> Japan
+  [IP Route]   10.13.9.142/24 -> 10.13.79.88/24 -> 10.13.58.203/24 -> 10.13.114.51/24 -> 10.13.80.177/24
+  [INFO] All internet traffic now routed through VPN chain
+
+[INFO] VPN-Chainer API running at: http://192.168.1.100:5000/rotate_vpn?key=a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+ * Serving Flask app 'vpn_chainer.vpn_chainer'
+ * Debug mode: off
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://10.13.80.177:5000
+Press CTRL+C to quit
+^C[HOOK] No pre-spin-down script found. Skipping.
+
+[SHUTDOWN] Cleaning up VPNs...
+  - Deactivating VPN [Singapore]...
+  - Deactivating VPN [Germany]...
+  - Deactivating VPN [Netherlands]...
+  - Deactivating VPN [Canada]...
+  - Deactivating VPN [Japan]...
+  - Removed route: 45.76.123.45 via 192.168.1.1
+  - Route 185.220.101.67 dev Singapore already removed
+  - Route 91.132.144.89 dev Germany already removed
+  - Route 198.244.131.205 dev Netherlands already removed
+  - Route 103.195.236.78 dev Canada already removed
+  - Route 0.0.0.0/1 dev Japan already removed
+  - Route 128.0.0.0/1 dev Japan already removed
+  - Cleaning up iptables rules...
+  - Restarted DNS resolver
+[HOOK] No post-spin-down script found. Skipping.
+```
+
+**Key Points from the Output:**
+- 🔍 **Discovery**: Found 12 WireGuard config files in `/etc/wireguard/`
+- 🌐 **Chain Creation**: Established 5-hop VPN chain: Singapore → Germany → Netherlands → Canada → Japan
+- 🔒 **Security**: Each VPN's endpoint is routed through the previous VPN to prevent leaks
+- 📡 **API Access**: Web API available for remote VPN rotation with unique key
+- 🧹 **Clean Shutdown**: Proper cleanup when interrupted with Ctrl+C
 
 ---
 

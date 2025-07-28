@@ -96,8 +96,6 @@ def list_vpn_configs():
     try:
         wg_path = Path(WG_CONFIG_DIR)
         print(f"[DEBUG] Checking directory: {wg_path}")
-        print(f"[DEBUG] Directory exists: {wg_path.exists()}")
-        print(f"[DEBUG] Directory is readable: {wg_path.is_dir()}")
         
         configs = list(wg_path.glob('*.conf'))
         print(f"[DEBUG] Found {len(configs)} config files")
