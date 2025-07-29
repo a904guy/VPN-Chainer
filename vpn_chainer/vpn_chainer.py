@@ -4,6 +4,9 @@ import sys
 import subprocess
 import signal
 import uuid
+import time
+from pathlib import Path
+import os
 
 try:
     import speedtest
@@ -19,8 +22,6 @@ except ImportError:
     subprocess.run([sys.executable, '-m', 'pip', 'install', 'setproctitle'], check=True)
     from setproctitle import setproctitle
 
-from pathlib import Path
-import time
 try:
     from flask import Flask, jsonify, request, abort
 except ImportError:
@@ -96,7 +97,7 @@ def list_vpn_configs():
     try:
         wg_path = Path(WG_CONFIG_DIR)
         print(f"[DEBUG] Checking directory: {wg_path}")
-        
+
         configs = list(wg_path.glob('*.conf'))
         print(f"[DEBUG] Found {len(configs)} config files")
         
@@ -289,11 +290,10 @@ PersistentKeepalive = {persistent_keepalive}
         subprocess.run(['ip', 'link', 'set', vpn_name, 'up'], check=True)
         
         # Enable IP forwarding for this interface
-        subprocess.run(['sysctl', '-w', f'net.ipv4.conf.{vpn_name}.forwarding=1'], check=True)
+        subprocess.run(['sysctl', '-w', f'net.ipv4.conf.{vpn_name}.forwarding=1'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
         # Wait for WireGuard handshake to establish
         print(f"    [INFO] Waiting for WireGuard handshake...")
-        import time
         time.sleep(3)  # Give WireGuard time to establish connection
         
         # Set up DNS for this interface
