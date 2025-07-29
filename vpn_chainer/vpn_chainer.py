@@ -41,6 +41,7 @@ SERVICE_FILE_PATH = "/etc/systemd/system/vpn-chainer.service"
 active_vpn_configs = []
 previous_routes = []  # Store interface addresses for reference
 added_routes = []  # Store actual network routes added for cleanup
+added_iptables_rules = []  # Store iptables rules we added for cleanup
 vpn_name_list = []  # List of VPN interface names for cross-referencing
 vpn_ip_list = []  # List of pure VPN IPs (without CIDR) for gateway referencing
 vpn_count = 0  # Number of VPNs requested at startup
@@ -64,6 +65,41 @@ def check_and_install(pkg, apt_name=None):
             subprocess.run(['apt', 'install', '-y', apt_name], check=True)
         else:
             subprocess.run(['apt', 'install', '-y', pkg], check=True)
+
+def add_iptables_rule(table, action, *args):
+    """Add an iptables rule and track it for later removal."""
+    global added_iptables_rules
+    
+    # Build the command
+    cmd = ['iptables']
+    if table != 'filter':
+        cmd.extend(['-t', table])
+    cmd.extend([action] + list(args))
+    
+    # Execute the rule
+    subprocess.run(cmd, check=True)
+    
+    # Store rule for cleanup (convert -A to -D for deletion)
+    cleanup_cmd = cmd.copy()
+    if action == '-A':
+        cleanup_cmd[cleanup_cmd.index('-A')] = '-D'
+        added_iptables_rules.append(cleanup_cmd)
+    
+    print(f"    [IPTABLES] Added rule: {' '.join(cmd[1:])}")
+
+def remove_tracked_iptables_rules():
+    """Remove only the iptables rules we added."""
+    global added_iptables_rules
+    
+    print("  - Cleaning up tracked iptables rules...")
+    for rule_cmd in reversed(added_iptables_rules):  # Remove in reverse order
+        try:
+            subprocess.run(rule_cmd, check=True)
+            print(f"    [IPTABLES] Removed rule: {' '.join(rule_cmd[1:])}")
+        except subprocess.CalledProcessError as e:
+            print(f"    [WARNING] Failed to remove iptables rule {' '.join(rule_cmd[1:])}: {e}")
+    
+    added_iptables_rules = []
 
 def configure_dns(vpn_name, dns_server):
     """Configure DNS for VPN interface using available resolver."""
@@ -158,7 +194,7 @@ def select_vpn_configs(count, fastest=False):
 
 def setup_vpn():
     """Bring up VPN interfaces, set routing, and run hooks."""
-    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list, added_iptables_rules
 
     run_hook("pre-spin-up")
 
@@ -169,6 +205,7 @@ def setup_vpn():
     
     previous_routes = []
     added_routes = []
+    added_iptables_rules = []  # Reset iptables tracking
     vpn_ip_list = []  # Initialize list for pure IPs (without CIDR)
     print("\n[SETUP] Establishing VPN Chain...")
 
@@ -318,10 +355,10 @@ PersistentKeepalive = {persistent_keepalive}
                     print(f"    [WARNING] Could not add endpoint route: {e}")
             
             # Set up iptables rules for forwarding between VPN interfaces
-            subprocess.run(['iptables', '-A', 'FORWARD', '-i', vpn_name, '-o', previous_vpn_name, '-j', 'ACCEPT'], check=True)
-            subprocess.run(['iptables', '-A', 'FORWARD', '-i', previous_vpn_name, '-o', vpn_name, '-j', 'ACCEPT'], check=True)
+            add_iptables_rule('filter', '-A', 'FORWARD', '-i', vpn_name, '-o', previous_vpn_name, '-j', 'ACCEPT')
+            add_iptables_rule('filter', '-A', 'FORWARD', '-i', previous_vpn_name, '-o', vpn_name, '-j', 'ACCEPT')
             # NAT traffic going from this VPN to the previous one
-            subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', previous_vpn_name, '-j', 'MASQUERADE'], check=True)
+            add_iptables_rule('nat', '-A', 'POSTROUTING', '-o', previous_vpn_name, '-j', 'MASQUERADE')
         
         elif i == 0:
             # First VPN: route its endpoint through original gateway and set up NAT
@@ -344,7 +381,7 @@ PersistentKeepalive = {persistent_keepalive}
                     print(f"    [WARNING] Could not add endpoint route: {e}")
             
             # Set up NAT for the first VPN
-            subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', vpn_name, '-j', 'MASQUERADE'], check=True)
+            add_iptables_rule('nat', '-A', 'POSTROUTING', '-o', vpn_name, '-j', 'MASQUERADE')
 
         previous_routes.append(address)
 
@@ -386,7 +423,7 @@ PersistentKeepalive = {persistent_keepalive}
 
 def undo_vpn():
     """Shutdown VPN interfaces, remove routing, and run hooks."""
-    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list
+    global active_vpn_configs, previous_routes, added_routes, vpn_name_list, vpn_ip_list, added_iptables_rules
 
     run_hook("pre-spin-down")
 
@@ -427,12 +464,8 @@ def undo_vpn():
             else:
                 print(f"  - Warning: Failed to remove route {route}: {e}")
 
-    # Clean up iptables rules
-    print("  - Cleaning up iptables rules...")
-    subprocess.run(['iptables', '-F'], check=True)
-    subprocess.run(['iptables', '-t', 'nat', '-F'], check=True)
-    subprocess.run(['iptables', '-X'], check=False)  # Don't fail if no custom chains
-    subprocess.run(['iptables', '-t', 'nat', '-X'], check=False)
+    # Clean up only our iptables rules
+    remove_tracked_iptables_rules()
     
     # Restart DNS to restore normal resolution
     try:
@@ -446,6 +479,7 @@ def undo_vpn():
     active_vpn_configs = []
     previous_routes = []
     added_routes = []
+    added_iptables_rules = []
     vpn_name_list = []
     vpn_ip_list = []
 
