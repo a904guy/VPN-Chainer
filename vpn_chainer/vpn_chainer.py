@@ -406,7 +406,7 @@ PersistentKeepalive = {persistent_keepalive}
                 raise
 
     # Enable global IP forwarding
-    subprocess.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], check=True)
+    subprocess.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     
     # Flush DNS cache to force re-resolution through VPN
     try:
